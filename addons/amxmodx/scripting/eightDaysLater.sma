@@ -28,7 +28,6 @@ new hit_zombie[ZOMBIE_HIT][] = {"zombie/claw_strike1.wav", "zombie/claw_strike2.
 new pain_zombie[ZOMBIE_PAIN][] = {"eightDaysLater/zombie_pain1.wav", "eightDaysLater/zombie_pain2.wav" }
 
 new const g_sound_zombiewin[] = 	"ichy/ichy_die2.wav";
-
 #define Keysmenu_1 (1<<0)|(1<<1)|(1<<2)|(1<<3)|(1<<4)|(1<<5)|(1<<9)
 #define fm_find_ent_by_class(%1,%2) engfunc(EngFunc_FindEntityByString, %1, "classname", %2)
 
@@ -50,7 +49,11 @@ new bool:g_zombie[33]
 new mod_name[32] = "8 Days Later"
 
 //Pcvars...
-new zombieModEnabled, zombieHealth, zombieArmor, zombieSpeed, nightMode, nightModeDarknessLevel, weatherMode, humanHeadDamageForWonkyCamera, zombieHeadDamageForWonkyCamera, spookyAmbientSounds, zombieNightVision, terroristsAreZombies, zombieDisplayHealthAndArmor, zomb_ammo, zomb_obj, cvar_Skyname
+new zombieModEnabled, zombieHealth, zombieArmor, zombieSpeed, nightMode, nightModeDarknessLevel, weatherMode, humanHeadDamageForWonkyCamera, zombieHeadDamageForWonkyCamera, spookyAmbientSounds, 
+zombieNightVision, terroristsAreZombies, zombieDisplayHealthAndArmor, zomb_ammo, zomb_obj, cvar_Skyname, zombieRoundIncrement
+
+// Global variable to track health/armor bonus
+new g_iRoundBonus = 0
 
 new MODEL[256], zomb_model, use_model
 new bombMap = 0
@@ -65,7 +68,6 @@ new hudsync
 #define CONFIG_FILE "eightDaysLater.ini"
 
 new g_ForwardSpawn;
-
 new const g_sound_die[][] = {
 	"aslave/slv_die1.wav",
 	"aslave/slv_die2.wav",
@@ -107,12 +109,10 @@ public plugin_init() {
 	register_message(get_user_msgid("HostagePos"),"message_hostagepos");
 	
 	register_message(get_user_msgid("SendAudio"), "Message_SendAudio");
-	
 	register_concmd("zombieModEnable", "turnZombieModOnOrOff", ADMIN_BAN, "<0/1> Disable/Enable 8 Days Later")
 	register_concmd("zombieTs", "turnTerroristsToZombies", ADMIN_BAN, "<0/1> Disable/Enable Zombie Terrorists")
 
 	cvar_Skyname = register_cvar("zswarm_skyname", SKYNAME);
-
 	zomb_model = register_cvar("zs_model","eightDaysLaterZombie")
 	use_model = register_cvar("zs_use","1")
 	zomb_ammo = register_cvar("zs_ammo","0")
@@ -151,7 +151,6 @@ public plugin_init() {
 	}
 
 	register_forward(FM_EmitSound, "Forward_EmitSound");
-	
 	format(mod_name, 31, "8 Days Later %s", VERSION)
 	
 	if(get_pcvar_num(zombieDisplayHealthAndArmor) == 1) {
@@ -171,7 +170,6 @@ new const g_MapEntities[][] = {
 	"func_vip_safetyzone",
 	"func_escapezone"
 };
-
 public Forward_Spawn(iEnt) {
 	
 	if(!pev_valid(iEnt)) {
@@ -180,7 +178,6 @@ public Forward_Spawn(iEnt) {
 
 	static className[32];
 	pev(iEnt, pev_classname, className, charsmax(className));
-
 	for(new i = 0; i < sizeof g_MapEntities; ++i) {
 		
 		if(equal(className, g_MapEntities[i])) {
@@ -206,6 +203,9 @@ public plugin_precache() {
 	spookyAmbientSounds = register_cvar("edl_spookyAmbientSounds","0")
 	humanHeadDamageForWonkyCamera = register_cvar("edl_humanHeadDamageForWonkyCamera","55")
 	zombieHeadDamageForWonkyCamera = register_cvar("edl_zombieHeadDamageForWonkyCamera","150")
+	
+	// New Cvar for incremental increase
+	zombieRoundIncrement = register_cvar("edl_zombieRoundIncrement", "50")
 	
 	loadConfigFile()
 	
@@ -326,6 +326,9 @@ public loadConfigFile() {
 				else if (equal(key, "ZOMBIE_HEAD_DAMAGE_FOR_WONKY_CAMERA")) {
 					set_cvar_num("edl_zombieHeadDamageForWonkyCamera", str_to_num(value))
 				}
+				else if (equal(key, "ZOMBIE_ROUND_INCREMENT")) {
+					set_cvar_num("edl_zombieRoundIncrement", str_to_num(value))
+				}
 			}
 		}
 	}
@@ -401,6 +404,9 @@ public turnZombieModOn() {
 		g_restart_attempt[i] = false
 	}
 	
+	// Reset round bonus
+	g_iRoundBonus = 0
+	
 	set_cvar_num("edl_zombieModEnabled", 1)
 	
 	
@@ -424,6 +430,9 @@ public turnZombieModOff() {
 		g_restart_attempt[i] = false
 		client_cmd(i, "stopsound")
 	}
+	
+	// Reset round bonus
+	g_iRoundBonus = 0
 	
 	set_cvar_num("edl_zombieModEnabled", 0)
 	
@@ -533,6 +542,11 @@ public logevent_round_end() {
 	if (task_exists(7294)) {
 		remove_task(7294)	
 	}
+	
+	// Increment bonus if mod is enabled
+	if(get_pcvar_num(zombieModEnabled)) {
+		g_iRoundBonus += get_pcvar_num(zombieRoundIncrement)
+	}
 }
 
 public event_restart_attempt() {
@@ -540,6 +554,9 @@ public event_restart_attempt() {
 	if(!get_pcvar_num(zombieModEnabled)) {
 		return PLUGIN_HANDLED
 	}
+	
+	// Reset bonus on game restart
+	g_iRoundBonus = 0
 	
 	new players[32], num
 	get_players(players, num, "a")
@@ -571,7 +588,7 @@ public humanPlayerSpawn(id) {
 	g_zombie[id] = false
 	set_user_footsteps(id, 0)
 //	cs_set_user_money(id, cs_get_user_money(id))
-	cs_set_user_money(id, cs_get_user_money(id) + 16000)
+//	cs_set_user_money(id, cs_get_user_money(id) + 16000)
 	
 	if (get_pcvar_num(use_model)) {
 		cs_reset_user_model(id)
@@ -584,8 +601,11 @@ public zombiePlayerSpawn(id) {
 
 	g_zombie[id] = true
 	set_task(random_float(0.1,0.5), "Reset_Weapons", id) //Strips zombies if they do have guns
-	set_user_health(id,get_pcvar_num(zombieHealth))
-	cs_set_user_armor(id,get_pcvar_num(zombieArmor),ArmorType)
+	
+	// Apply base health/armor + incremented bonus
+	set_user_health(id, get_pcvar_num(zombieHealth) + g_iRoundBonus)
+	cs_set_user_armor(id, get_pcvar_num(zombieArmor) + g_iRoundBonus, ArmorType)
+	
 	set_user_footsteps(id, 0)
 	set_user_gravity(id,0.875)
 	cs_set_user_money(id,0)
@@ -631,7 +651,6 @@ public event_player_spawn(id) {
 	}
 	
 	new hideflags;
-	
 	if (g_zombie[id]) {
 		hideflags = getZombieHideFlags()
 	} else {
@@ -652,7 +671,6 @@ public event_player_spawn(id) {
 public msg_hideweapon(id) {
 	
 	new hideflags;
-	
 	if (id < sizeof(g_zombie) && g_zombie[id]) {
 		hideflags = getZombieHideFlags()
 	} else {
@@ -667,7 +685,6 @@ public msg_hideweapon(id) {
 getZombieHideFlags() {
 
 	new iFlags;
-
 	iFlags |= HUD_HIDE_HEALTH_AND_ARMOR;
 	iFlags |= HUD_HIDE_TIMER;
 	iFlags |= HUD_HIDE_MONEY;
@@ -800,7 +817,8 @@ public event_cur_weapon(id) {
 	new weapon = read_data(2)
 	new clip = read_data(3)
 	
-	if (g_WeaponSlots[weapon] == SLOT_PRIMARY || g_WeaponSlots[weapon] == SLOT_SECONDARY) {
+	if (g_WeaponSlots[weapon] == SLOT_PRIMARY ||
+	g_WeaponSlots[weapon] == SLOT_SECONDARY) {
 		
 		switch (get_pcvar_num(zomb_ammo)) {
 				
@@ -919,7 +937,8 @@ public applyNightMode() {
 	if (get_pcvar_num(nightMode) == 0) {
 		set_lights("#OFF")
 		remove_task(12175)
-	} else if (get_pcvar_num(nightMode) == 1 || get_pcvar_num(nightMode) == 2) {
+	} else if (get_pcvar_num(nightMode) == 1 ||
+	get_pcvar_num(nightMode) == 2) {
 		
 		switch(get_pcvar_num(nightModeDarknessLevel)) {
 			
@@ -991,7 +1010,8 @@ public fw_Touch(pToucher, pTouched) {
 	new className[32]
 	pev(pToucher, pev_classname, className, 31)
 	
-	if ( equal(className, "weaponbox") || equal(className, "armoury_entity" ) || equal(className, "weapon_shield" ) ) {
+	if ( equal(className, "weaponbox") ||
+	equal(className, "armoury_entity" ) || equal(className, "weapon_shield" ) ) {
 		return FMRES_SUPERCEDE
 	}
 		
@@ -1070,7 +1090,8 @@ public event_damage(id) {
 	new attacker = get_user_attacker(id, weapon, hitzone)
 	
 	new Float:Random_Float[3]
-	for(new i = 0; i < 3; i++) {
+	for(new i = 0;
+	i < 3; i++) {
 		Random_Float[i] = random_float(100.0, 125.0)
 	}
 	
@@ -1174,7 +1195,6 @@ public message_scenario(msg_id,msg_dest,msg_entity) {
 		
 		new sprite[8];
 		get_msg_arg_string(2, sprite, 7);
-
 		if(equal(sprite,"hostage")) {
 			return PLUGIN_HANDLED;
 		}
@@ -1285,7 +1305,7 @@ stock maxclip(weapon) {
 		case CSW_FIVESEVEN : ca = 20
 		case CSW_UMP45 : ca = 25
 		case CSW_SG550 : ca = 30
-		case CSW_GALI : ca = 35
+		case CSW_GALIL : ca = 35
 		case CSW_FAMAS : ca = 25
 		case CSW_USP : ca = 12
 		case CSW_GLOCK18 : ca = 20
